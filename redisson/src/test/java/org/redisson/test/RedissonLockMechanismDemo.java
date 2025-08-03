@@ -118,4 +118,51 @@ public class RedissonLockMechanismDemo {
             redisson.shutdown();
         }
     }
+    
+    @Test
+    public void demonstrateElastiCacheServerlessCompatibility() {
+        // Configuration optimized for AWS ElastiCache Serverless
+        Config config = new Config();
+        
+        // Disable slave synchronization check for serverless compatibility
+        config.setCheckLockSyncedSlaves(false);
+        config.setLockWatchdogTimeout(30000);
+        
+        // Example cluster configuration for ElastiCache Serverless with cluster mode
+        config.useClusterServers()
+              .addNodeAddress("redis://127.0.0.1:6379") // Replace with actual ElastiCache endpoint
+              .setConnectTimeout(3000)
+              .setTimeout(3000);
+        
+        // Alternative: Proxy mode for single endpoint ElastiCache Serverless
+        // config.useProxyServers()
+        //       .addAddress("redis://your-elasticache-serverless-endpoint:6379");
+        
+        RedissonClient redisson = Redisson.create(config);
+        
+        try {
+            RLock lock = redisson.getLock("elasticache-serverless-lock");
+            
+            // Lock operations work normally even without WAIT command support
+            boolean acquired = lock.tryLock(5, 10, TimeUnit.SECONDS);
+            assertTrue("Lock should be acquired in serverless mode", acquired);
+            
+            // Verify basic lock functionality
+            assertTrue("Lock should be held", lock.isHeldByCurrentThread());
+            assertTrue("Lock should be locked", lock.isLocked());
+            
+            // Test reentrancy
+            lock.lock();
+            assertEquals("Hold count should be 2", 2, lock.getHoldCount());
+            
+            lock.unlock();
+            assertEquals("Hold count should be 1", 1, lock.getHoldCount());
+            
+            lock.unlock();
+            assertFalse("Lock should not be held after final unlock", lock.isHeldByCurrentThread());
+            
+        } finally {
+            redisson.shutdown();
+        }
+    }
 }

@@ -177,14 +177,72 @@ config.setCheckLockSyncedSlaves(false);
 config.setSlavesSyncTimeout(100);
 ```
 
+## AWS ElastiCache Serverless Compatibility
+
+**Yes, Redisson is fully compatible with AWS ElastiCache Serverless**, with some important considerations for the lock mechanism:
+
+### Supported Configuration Modes
+
+1. **Cluster Mode** (Recommended for ElastiCache Serverless with cluster mode enabled):
+```java
+Config config = new Config();
+config.useClusterServers()
+      .addNodeAddress("rediss://your-elasticache-serverless-endpoint:6379");
+```
+
+2. **Proxy Mode** (For ElastiCache Serverless single endpoint):
+```java
+Config config = new Config();
+config.useProxyServers()
+      .addAddress("rediss://your-elasticache-serverless-endpoint:6379");
+```
+
+### WAIT Command Considerations
+
+ElastiCache Serverless may not support Redis `WAIT` and `WAITAOF` commands used for enhanced lock synchronization. Redisson handles this gracefully:
+
+1. **Automatic Fallback**: If WAIT commands are unsupported, Redisson automatically falls back to standard lock operations
+2. **Error Handling**: The system detects "ERR unknown command" responses and adjusts behavior accordingly
+3. **Configuration Options**: You can disable synchronization checks if needed:
+
+```java
+Config config = new Config();
+config.setCheckLockSyncedSlaves(false);  // Disable sync verification for serverless
+config.useClusterServers()
+      .addNodeAddress("rediss://your-elasticache-serverless-endpoint:6379");
+```
+
+### Lock Behavior with ElastiCache Serverless
+
+- **Basic Lock Functionality**: All core lock features work normally (acquisition, release, reentrancy, watchdog)
+- **Reduced Failover Protection**: Without WAIT command support, the enhanced master-slave failover protection is not available
+- **Automatic Scaling**: Locks work seamlessly as ElastiCache Serverless scales up/down based on demand
+- **SSL/TLS Support**: Use `rediss://` protocol for secure connections
+
+### Best Practices for ElastiCache Serverless
+
+```java
+Config config = new Config();
+config.setCheckLockSyncedSlaves(false);     // Disable for serverless compatibility
+config.setLockWatchdogTimeout(30000);       // Standard watchdog timeout
+config.useClusterServers()
+      .addNodeAddress("rediss://your-endpoint:6379")
+      .setConnectTimeout(3000)
+      .setTimeout(3000);
+
+RedissonClient redisson = Redisson.create(config);
+```
+
 ## Summary
 
 Redisson handles the master-slave failover window through:
 
-1. **WAIT Command Usage**: Ensures replication to slaves before confirming lock acquisition
-2. **Slave Synchronization Verification**: Checks that at least one slave received the lock
-3. **Configurable Timeouts**: Allows tuning between consistency and performance
-4. **Watchdog Mechanism**: Prevents indefinite lock hanging
-5. **Atomic Operations**: Uses Lua scripts for atomic lock operations
+1. **WAIT Command Usage**: Ensures replication to slaves before confirming lock acquisition (when supported)
+2. **Graceful Fallback**: Automatically adapts when WAIT commands are unavailable (e.g., ElastiCache Serverless)
+3. **Slave Synchronization Verification**: Checks that at least one slave received the lock (configurable)
+4. **Configurable Timeouts**: Allows tuning between consistency and performance
+5. **Watchdog Mechanism**: Prevents indefinite lock hanging
+6. **Atomic Operations**: Uses Lua scripts for atomic lock operations
+7. **Cloud Service Compatibility**: Works with AWS ElastiCache Serverless, Azure Redis Cache, and other managed services
 
-The key insight is that Redisson **does use the WAIT command** to handle the critical window where master fails but lock info isn't yet replicated to slaves. This provides strong consistency guarantees at the cost of some performance overhead.
+The key insight is that Redisson **does use the WAIT command when available** to handle the critical window where master fails but lock info isn't yet replicated to slaves. For services like AWS ElastiCache Serverless that may not support WAIT commands, Redisson provides graceful fallback mechanisms while maintaining core lock functionality.

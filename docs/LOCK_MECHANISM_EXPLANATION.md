@@ -215,12 +215,40 @@ config.useClusterServers()
 ### Lock Behavior with ElastiCache Serverless
 
 - **Basic Lock Functionality**: All core lock features work normally (acquisition, release, reentrancy, watchdog)
-- **Reduced Failover Protection**: Without WAIT command support, the enhanced master-slave failover protection is not available
+- **⚠️ Reduced Failover Protection**: Without WAIT command support, there is a risk of lock information loss during master-slave failover
+- **The Critical Window Risk**: If a master fails after lock acquisition but before replication to slaves, the lock information may be lost, potentially allowing dual lock ownership
 - **Automatic Scaling**: Locks work seamlessly as ElastiCache Serverless scales up/down based on demand
 - **SSL/TLS Support**: Use `rediss://` protocol for secure connections
 
+#### Understanding the Failover Risk
+
+When using ElastiCache Serverless:
+
+1. **No WAIT Command Support**: ElastiCache Serverless doesn't support Redis `WAIT`/`WAITAOF` commands
+2. **Fallback Behavior**: Redisson automatically falls back to standard lock operations without replication verification
+3. **Potential Race Condition**: During the brief window between lock acquisition and replication, a master failure could result in:
+   - Client A acquires lock on master
+   - Master fails before lock data replicates to slaves
+   - Slave becomes new master (without lock information)
+   - Client B can acquire the same lock
+
+#### Risk Mitigation Strategies
+
+**For Applications That Can Tolerate Brief Inconsistencies:**
+```java
+Config config = new Config();
+config.setCheckLockSyncedSlaves(false);  // Accept the risk for better performance
+```
+
+**For Critical Applications Requiring Strong Consistency:**
+- Consider using ElastiCache with cluster mode and replication groups
+- Implement application-level coordination for critical sections
+- Use external coordination services (e.g., AWS DynamoDB with conditional writes)
+- Add application-level conflict detection and resolution
+
 ### Best Practices for ElastiCache Serverless
 
+#### Standard Configuration (Accepts Failover Risk)
 ```java
 Config config = new Config();
 config.setCheckLockSyncedSlaves(false);     // Disable for serverless compatibility
@@ -231,6 +259,37 @@ config.useClusterServers()
       .setTimeout(3000);
 
 RedissonClient redisson = Redisson.create(config);
+```
+
+#### High-Availability Alternative Approaches
+
+If the failover risk is unacceptable for your use case:
+
+**Option 1: Use ElastiCache with Replication Groups**
+```java
+// Standard ElastiCache with cluster mode and replication
+Config config = new Config();
+config.setCheckLockSyncedSlaves(true);
+config.setSlavesSyncTimeout(3000);
+config.useClusterServers()
+      .addNodeAddress("rediss://your-replication-group-endpoint:6379");
+```
+
+**Option 2: Application-Level Coordination**
+```java
+// Combine Redisson locks with application-level checks
+RLock lock = redisson.getLock("my-resource");
+if (lock.tryLock(5, 30, TimeUnit.SECONDS)) {
+    try {
+        // Additional application-level validation
+        if (validateResourceState()) {
+            // Perform critical operation
+            performCriticalOperation();
+        }
+    } finally {
+        lock.unlock();
+    }
+}
 ```
 
 ## Summary
@@ -245,4 +304,10 @@ Redisson handles the master-slave failover window through:
 6. **Atomic Operations**: Uses Lua scripts for atomic lock operations
 7. **Cloud Service Compatibility**: Works with AWS ElastiCache Serverless, Azure Redis Cache, and other managed services
 
-The key insight is that Redisson **does use the WAIT command when available** to handle the critical window where master fails but lock info isn't yet replicated to slaves. For services like AWS ElastiCache Serverless that may not support WAIT commands, Redisson provides graceful fallback mechanisms while maintaining core lock functionality.
+### Important Considerations for ElastiCache Serverless
+
+**✅ Compatibility**: Redisson is fully compatible with AWS ElastiCache Serverless
+**⚠️ Consistency Trade-off**: Without WAIT command support, there is a small risk of lock inconsistency during failover scenarios
+**🎯 Use Cases**: Suitable for most applications that can tolerate brief inconsistencies, but consider alternatives for applications requiring strict consistency guarantees
+
+The key insight is that Redisson **does use the WAIT command when available** to handle the critical window where master fails but lock info isn't yet replicated to slaves. For services like AWS ElastiCache Serverless that may not support WAIT commands, Redisson provides graceful fallback mechanisms while maintaining core lock functionality, but with the understanding that the enhanced failover protection is not available.

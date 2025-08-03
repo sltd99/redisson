@@ -125,6 +125,8 @@ public class RedissonLockMechanismDemo {
         Config config = new Config();
         
         // Disable slave synchronization check for serverless compatibility
+        // NOTE: This accepts the risk of potential lock information loss during failover
+        // since ElastiCache Serverless doesn't support WAIT commands for replication verification
         config.setCheckLockSyncedSlaves(false);
         config.setLockWatchdogTimeout(30000);
         
@@ -144,6 +146,7 @@ public class RedissonLockMechanismDemo {
             RLock lock = redisson.getLock("elasticache-serverless-lock");
             
             // Lock operations work normally even without WAIT command support
+            // However, there's a small risk of lock inconsistency during failover scenarios
             boolean acquired = lock.tryLock(5, 10, TimeUnit.SECONDS);
             assertTrue("Lock should be acquired in serverless mode", acquired);
             
